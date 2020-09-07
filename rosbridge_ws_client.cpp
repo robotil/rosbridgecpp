@@ -1,13 +1,19 @@
-/*
- *  Created on: Apr 16, 2018
- *      Author: Poom Pianpak
- */
-
 #include "rosbridge_ws_client.hpp"
 
+#include <cstring>
+#include <fstream>
 #include <future>
+#include <string>
+#include <iostream>
 
-RosbridgeWsClient rbc("localhost:9090");
+#include "rapidjson/document.h" 
+
+using namespace std;
+using namespace rapidjson;
+
+//RosbridgeWsClient rbc("simapi.easyrms.app:9090");
+//RosbridgeWsClient rbc("192.168.17.100:9091");
+RosbridgeWsClient rbc("simapi.easyrms.app:9091");
 
 void advertiseServiceCallback(std::shared_ptr<WsClient::Connection> /*connection*/, std::shared_ptr<WsClient::InMessage> in_message)
 {
@@ -53,26 +59,50 @@ void publisherThread(RosbridgeWsClient& rbc, const std::future<void>& futureObj)
   std::cout << "publisherThread stops()" << std::endl;
 }
 
-void subscriberCallback(std::shared_ptr<WsClient::Connection> /*connection*/, std::shared_ptr<WsClient::InMessage> in_message)
+void subscriberCallback(std::shared_ptr<WsClient::Connection> connection, std::shared_ptr<WsClient::InMessage> in_message)
 {
-  std::cout << "subscriberCallback(): Message Received: " << in_message->string() << std::endl;
+  std::cout << "subscriberCallback(): Drone mode " << in_message->string() << std::endl;
 }
 
+
 int main() {
-  rbc.addClient("service_advertiser");
-  rbc.advertiseService("service_advertiser", "/zservice", "std_srvs/SetBool", advertiseServiceCallback);
 
-  rbc.addClient("topic_advertiser");
-  rbc.advertise("topic_advertiser", "/ztopic", "std_msgs/String");
+  rbc.addClient("sub");
+  rbc.subscribe("sub", "/control_api/drone/status", subscriberCallback);
 
-  rbc.addClient("topic_subscriber");
-  rbc.subscribe("topic_subscriber", "/ztopic", subscriberCallback);
+  rapidjson::Document document1(rapidjson::kObjectType);
+  document1.AddMember("type", "open", document1.GetAllocator());
+  document1.AddMember("param1", 0, document1.GetAllocator());
+  document1.AddMember("param2", 0, document1.GetAllocator());
+  rbc.callService("/control_api/eg/command", callServiceCallback, document1);
+  usleep(10*1e6);
+  
+  rapidjson::Document document2(rapidjson::kObjectType);
+  document2.AddMember("min_pitch", 0, document2.GetAllocator());
+  document2.AddMember("yaw", 0, document2.GetAllocator());
+  document2.AddMember("altitude", 20, document2.GetAllocator());
+  rbc.callService("/control_api/cmd/takeoff", callServiceCallback, document2);
+  usleep(20*1e6);
+  
+  rapidjson::Document document3(rapidjson::kObjectType);
+  document3.AddMember("min_pitch", 0, document3.GetAllocator());
+  document3.AddMember("yaw", 0, document3.GetAllocator());
+  document3.AddMember("altitude", 20, document3.GetAllocator());
+  rbc.callService("/control_api/cmd/land", callServiceCallback, document3);
+  usleep(30*1e6);
 
+  rbc.removeClient("sub");
+  std::cout << "Program terminated" << std::endl;
+	
+
+  
+  //rbc.addClient("service_advertiser");
+  //rbc.advertiseService("service_advertiser", "/zservice", "std_srvs/SetBool", advertiseServiceCallback);
+
+  //rbc.addClient("topic_advertiser");
+  //rbc.advertise("topic_advertiser", "/ztopic", "std_msgs/String");
   // Test calling a service
-  rapidjson::Document document(rapidjson::kObjectType);
-  document.AddMember("data", true, document.GetAllocator());
-  rbc.callService("/zservice", callServiceCallback, document);
-
+/*
   // Test creating and stopping a publisher
   {
     // Create a std::promise object
@@ -101,5 +131,8 @@ int main() {
   rbc.removeClient("topic_advertiser");
   rbc.removeClient("topic_subscriber");
 
-  std::cout << "Program terminated" << std::endl;
+  std::cout << "Program terminated" << std::endl;*/
 }
+
+
+

@@ -7,6 +7,7 @@
 #define ROSBRIDGECPP_ROSBRIDGE_WS_CLIENT_HPP_
 
 #include "Simple-WebSocket-Server/client_ws.hpp"
+//#include "Simple-WebSocket-Server/client_wss.hpp"
 
 #include "rapidjson/include/rapidjson/document.h"
 #include "rapidjson/include/rapidjson/writer.h"
@@ -16,18 +17,84 @@
 #include <functional>
 #include <thread>
 
+#include <bits/stdc++.h>
+#include "ros/ros.h"
+#include "rosauth/Authentication.h"
+#include <openssl/sha.h>
+#include <fstream>
+#include <stdio.h>
+#include <curl/curl.h>
+
+
+
+using namespace std;
+
 using WsClient = SimpleWeb::SocketClient<SimpleWeb::WS>;
+//using WsClient = SimpleWeb::SocketClient<SimpleWeb::WSS>;
 using InMessage =  std::function<void(std::shared_ptr<WsClient::Connection>, std::shared_ptr<WsClient::InMessage>)>;
+
+string glob_mac_secret;
+
+size_t WriteCallback(char *contents, size_t size, size_t nmemb, void *userp)
+{
+    ((std::string*)userp)->append((char*)contents, size * nmemb);
+	string str = contents;
+	if (str.find("true")==string::npos)
+		printf("ERROR: Secret code not read succesfully.");
+	else
+		glob_mac_secret = str.substr(26, 16);
+	printf("\nsecret: %s\n",glob_mac_secret.c_str());
+    return size * nmemb;
+}
+
+string get_auth(string client_name){	
+		
+	string mac_secret = glob_mac_secret;
+	
+	string mac_rand = ""; 
+	const int MAX_SIZE = 62;
+	char letters[MAX_SIZE] = {'A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z','a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9'};
+	for (int i=0;i<10;i++) mac_rand += letters[rand() % MAX_SIZE];
+	  
+	struct timespec mac_time;
+	timespec_get(&mac_time, TIME_UTC);	
+	
+	string mac_level 	= "admin";
+	//string mac_dest 	= "wss://simapi.easyrms.app:9090";
+	string mac_dest 	= "ws://simapi.easyrms.app:9091";
+	//string mac_dest 	= "ws://192.168.17.100:9091";
+	string mac_client 	= "192.168.18.1";
+	
+	stringstream ss;
+	ss << mac_secret << mac_client << mac_dest << mac_rand << mac_time.tv_sec << mac_level << mac_time.tv_sec+10000;
+	int len = ss.str().length();
+
+		unsigned char sha512_hash[SHA512_DIGEST_LENGTH];
+		SHA512((unsigned char *)ss.str().c_str(), ss.str().length(), sha512_hash); 
+		char hex[SHA512_DIGEST_LENGTH * 2];
+		for (int i = 0; i < SHA512_DIGEST_LENGTH; i++)
+			sprintf(&hex[i * 2], "%02x", sha512_hash[i]);
+
+	stringstream ss1;           
+	ss1 << "\"op\":\"auth\", \"mac\":\"" << hex << "\", \"client\":\"" << mac_client;
+	ss1 << "\", \"dest\":\"" << mac_dest << "\", \"rand\":\"" << mac_rand << "\", \"t\":" << mac_time.tv_sec;
+	ss1 << ", \"level\":\"" << mac_level << "\", \"end\":" << (mac_time.tv_sec+10000);                      
+	std::string msg = ss1.str(); 
+	msg = "{" + msg + "}";
+	return msg;
+}
 
 class RosbridgeWsClient
 {
   std::string server_port_path;
   std::unordered_map<std::string, std::shared_ptr<WsClient>> client_map;
 
-  void start(const std::string& client_name, std::shared_ptr<WsClient> client, const std::string& message)
+  void start(const std::string& client_name, std::shared_ptr<WsClient> client, /*const*/ std::string& message)
   {
+	  
     if (!client->on_open)
     {
+		
 #ifdef DEBUG
       client->on_open = [client_name, message](std::shared_ptr<WsClient::Connection> connection) {
 #else
@@ -35,9 +102,13 @@ class RosbridgeWsClient
 #endif
 
 #ifdef DEBUG
+
         std::cout << client_name << ": Opened connection" << std::endl;
         std::cout << client_name << ": Sending message: " << message << std::endl;
 #endif
+
+		string msg = get_auth(client_name);
+		connection->send(msg);
         connection->send(message);
       };
     }
@@ -49,8 +120,8 @@ class RosbridgeWsClient
         std::cout << client_name << ": Message received: " << in_message->string() << std::endl;
       };
     }
-
-    if (!client->on_close)
+	
+	if (!client->on_close)
     {
       client->on_close = [client_name](std::shared_ptr<WsClient::Connection> /*connection*/, int status, const std::string & /*reason*/) {
         std::cout << client_name << ": Closed connection with status code " << status << std::endl;
@@ -59,7 +130,7 @@ class RosbridgeWsClient
 
     if (!client->on_error)
     {
-      // See http://www.boost.org/doc/libs/1_55_0/doc/html/boost_asio/reference.html, Error Codes for error code meanings
+		// See http://www.boost.org/doc/libs/1_55_0/doc/html/boost_asio/reference.html, Error Codes for error code meanings
       client->on_error = [client_name](std::shared_ptr<WsClient::Connection> /*connection*/, const SimpleWeb::error_code &ec) {
         std::cout << client_name << ": Error: " << ec << ", error message: " << ec.message() << std::endl;
       };
@@ -88,10 +159,32 @@ class RosbridgeWsClient
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 
+
 public:
   RosbridgeWsClient(const std::string& server_port_path)
   {
     this->server_port_path = server_port_path;
+	
+	CURL *curl;
+	CURLcode res;
+	curl_global_init(CURL_GLOBAL_ALL);
+	curl = curl_easy_init();
+	std::string readBuffer;
+	if(curl) 
+	{
+		printf("Authenticating...\n");
+		//curl_easy_setopt(curl, CURLOPT_URL, "https://simapi.easyrms.app/control_api/token");
+		//curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "username=test&password=test&port=9090");
+		//curl_easy_setopt(curl, CURLOPT_URL, "http://192.168.17.100:34001/control_api/token");
+		curl_easy_setopt(curl, CURLOPT_URL, "https://simapi.easyrms.app/control_api/token");
+		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "username=test&password=test&port=9091");
+		curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
+		
+		res = curl_easy_perform(curl);
+		curl_easy_cleanup(curl);
+	}
+	curl_global_cleanup();	
   }
 
   ~RosbridgeWsClient()
@@ -169,7 +262,62 @@ public:
     }
 #endif
   }
+/*
+  void auth(const std::string& client_name)
+  { 
+  
+	// parameters
+	string mac_secret;
+	std::ifstream file ("/home/rms/easyaerial_ws/user_data/websocket_secret/secret9091.txt");
+	if(file)
+		if(file.is_open())
+			getline(file,mac_secret);
+	else
+		std::cerr << client_name << " secret file not found" << std::endl;
+	 
+	string mac_rand = ""; 
+	const int MAX_SIZE = 62;
+	char letters[MAX_SIZE] = {'A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z','a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','0','1','2','3','4','5','6','7','8','9'};
+	for (int i=0;i<10;i++) mac_rand += letters[rand() % MAX_SIZE];
+	  
+	struct timespec mac_time;
+	timespec_get(&mac_time, TIME_UTC);	
+	
+	string mac_level 	= "admin";
+	string mac_dest 	= "wss://simapi.easyrms.app:9091";
+	string mac_client 	= "192.168.18.1";
+	
+	// sha512
+	stringstream ss;
+	ss << mac_secret << mac_client << mac_dest << mac_rand << mac_time.tv_sec << mac_level << mac_time.tv_sec+10000;
+	
+	//const string mac = sha512(ss.str());
+	unsigned char sha512_hash[SHA512_DIGEST_LENGTH];
+    SHA512((unsigned char *)ss.str().c_str(), ss.str().length(), sha512_hash); 
+    // convert to a hex string to compare
+    char hex[SHA512_DIGEST_LENGTH * 2];
+    for (int i = 0; i < SHA512_DIGEST_LENGTH; i++)
+		sprintf(&hex[i * 2], "%02x", sha512_hash[i]);
 
+	std::unordered_map<std::string, std::shared_ptr<WsClient>>::iterator it = client_map.find(client_name);
+    if (it != client_map.end())
+    {
+	  stringstream ss1;           
+	  ss1 << "\"op\":\"auth\", \"mac\":\"" << hex << "\", \"client\":\"" << mac_client;
+	  ss1 << "\", \"dest\":\"" << mac_dest << "\", \"rand\":\"" << mac_rand << "\", \"t\":" << mac_time.tv_sec;
+      ss1 << ", \"level\":\"" << mac_level << "\", \"end\":" << (mac_time.tv_sec+10000);                      
+      std::string msg = ss1.str(); 
+      msg = "{" + msg + "}";
+      start(client_name, it->second, msg);
+    }
+#ifdef DEBUG
+    else
+    {
+      std::cerr << client_name << "has not been created" << std::endl;
+    }
+#endif
+  }
+*/
   void advertise(const std::string& client_name, const std::string& topic, const std::string& type, const std::string& id = "")
   {
     std::unordered_map<std::string, std::shared_ptr<WsClient>>::iterator it = client_map.find(client_name);
@@ -217,14 +365,13 @@ public:
       connection->send(message);
 
       // TODO: This could be improved by creating a thread to keep publishing the message instead of closing it right away
-      connection->send_close(1000);
     };
 
     start("publish_client", publish_client, message);
   }
 
   void subscribe(const std::string& client_name, const std::string& topic, const InMessage& callback, const std::string& id = "", const std::string& type = "", int throttle_rate = -1, int queue_length = -1, int fragment_size = -1, const std::string& compression = "")
-  {
+  {  
     std::unordered_map<std::string, std::shared_ptr<WsClient>>::iterator it = client_map.find(client_name);
     if (it != client_map.end())
     {
