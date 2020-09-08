@@ -64,11 +64,17 @@ void subscriberCallback(std::shared_ptr<WsClient::Connection> connection, std::s
   std::cout << "subscriberCallback(): Drone mode " << in_message->string() << std::endl;
 }
 
+void telemetryCallback(std::shared_ptr<WsClient::Connection> connection, std::shared_ptr<WsClient::InMessage> in_message)
+{
+  std::cout << "ZZZ telemetryCallback():  " << in_message->string() << std::endl;
+}
 
 int main() {
 
   rbc.addClient("sub");
   rbc.subscribe("sub", "/control_api/drone/status", subscriberCallback);
+  rbc.addClient("sub2");
+  rbc.subscribe("sub2", "/control_api/drone/telemetry", telemetryCallback);
 
   rapidjson::Document document1(rapidjson::kObjectType);
   document1.AddMember("type", "open", document1.GetAllocator());

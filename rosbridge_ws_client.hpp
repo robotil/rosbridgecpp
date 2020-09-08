@@ -34,7 +34,7 @@ using WsClient = SimpleWeb::SocketClient<SimpleWeb::WS>;
 using InMessage =  std::function<void(std::shared_ptr<WsClient::Connection>, std::shared_ptr<WsClient::InMessage>)>;
 
 string glob_mac_secret;
-
+#define DEBUG
 size_t WriteCallback(char *contents, size_t size, size_t nmemb, void *userp)
 {
     ((std::string*)userp)->append((char*)contents, size * nmemb);
